@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template launches specified number of EC2 instances via Auto scaling for testing OpsAutomator Backup/Restore
+Parameters:
+    InstanceType:
+        Description: Type of Instance to launch (t2.micro, t2.small, t2.large, m4.large etc)
+        Type: String
+        Default: t2.micro
+    DesiredCapacity:
+        Description: Number of EC2 instances to launch
+        Type: Number
+        Default: 10
+    AMIId:
+      Description: Image to use
+      Type: AWS::EC2::Image::Id
+#      AllowedValues: [ami-57615632, ami-f63b1193, ami-0b1e356e, ami-ef9a8503]
+    GroupId:
+      Description: Security group for EC2 instances
+      Type: AWS::EC2::SecurityGroup::Id
+    SubnetID1:
+      Description: SubnetID1
+      Type: AWS::EC2::Subnet::Id
+    SubnetID2:
+      Description: SubnetID2
+      Type: AWS::EC2::Subnet::Id
+## Uncomment this if you want to pass the IAM role to the stack.
+#    IAMRole:
+#      Description: Role to use for Instance Profile. Ensure role provides access to SSM
+#      Type: String
+    KeyPair:
+      Description: Keys to use for the spot instances
+      Type: AWS::EC2::KeyPair::KeyName
+    InstanceTagKey:
+      Description: Tag Key to apply to instances.
+      Type: String
+      Default: LlyOpsAutomatorTaskList
+    InstanceTagValue:
+      Description: Tag Value to apply to instances.
+      Type: String
+      Default: StandardBackup,StandardRetention,StandardOffsiteBackup
+
+Resources:
+  InstanceProfileRole:
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+      RoleName: BackupTestInstanceSSMRole
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles:
+      - !Ref InstanceProfileRole
+      InstanceProfileName: BackupTestInstanceProfile
+
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref AMIId
+      SecurityGroups:
+      - Ref: GroupId
+      InstanceType: !Ref InstanceType
+      BlockDeviceMappings:
+      - DeviceName: '/dev/xvdba'
+        Ebs:
+            DeleteOnTermination: true
+            Encrypted: true
+            VolumeSize: 10
+            VolumeType: 'gp2'
+      KeyName: !Ref KeyPair
+      IamInstanceProfile: !Ref InstanceProfile
+      UserData: !Base64 |
+        #!/bin/bash 
+        DEVICE=/dev/xvdba
+        MOUNT_POINT=/data
+
+        DEVICE_FS_TYPE=`file -sL $DEVICE `
+
+        if [[ $DEVICE_FS_TYPE == *"ext4"* ]]; then
+          echo "Device formatted"
+        else
+          echo "Formatting $DEVICE with an Ext4 fs"
+          mkfs.ext4 -q -F $DEVICE
+        fi
+
+        #Label the device
+        echo "Labelling $DEVICE"
+        e2label  $DEVICE $MOUNT_POINT
+
+        #Backup fstab
+        echo "Copying /etc/fstab to /etc/fstab.orig"
+        cp /etc/fstab /etc/fstab.orig
+
+        if [ ! -d "$MOUNT_POINT" ]; then
+             mkdir -p $MOUNT_POINT;
+             chmod 755 $MOUNT_POINT
+        fi
+
+        #Add new entry to fstab for the new device
+        echo "Adding new fstab entry"
+        echo "LABEL=$MOUNT_POINT     $MOUNT_POINT           ext4    defaults,nofail  2   2" >> /etc/fstab
+
+        #Mount all devices
+        echo "Mounting all devices"
+        mount -a
+
+        # Download and install ssm agent
+        #export HTTP_PROXY=http://lcc-http-proxy.d48.lilly.com:9000
+        #export http_proxy=http://lcc-http-proxy.d48.lilly.com:9000
+        #export HTTP_proxy=http://lcc-http-proxy.d48.lilly.com:9000
+        #export HTTP_PROXY=http://lcc-http-proxy.d48.lilly.com:9000
+        #export https_proxy=http://lcc-http-proxy.d48.lilly.com:9000
+        #export HTTPS_proxy=http://lcc-http-proxy.d48.lilly.com:9000
+        #export HTTPS_PROXY=http://lcc-http-proxy.d48.lilly.com:9000
+
+        yum install -y https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/linux_amd64/amazon-ssm-agent.rpm
+        systemctl status amazon-ssm-agent
+        systemctl enable amazon-ssm-agent
+        #setting up cron job to periodically create a test file with current date and time
+        curl https://s3.us-east-2.amazonaws.com/aam-scripts/create-test-file.sh -o /home/ec2-user/create-test-file.sh
+        chmod +x /home/ec2-user/create-test-file.sh
+        echo "Setting up cron job to periodically create a test file"
+        crontab -l 2>/dev/null 
+        echo "0 * * * * /home/ec2-user/create-test-file.sh America/Indiana/Indianapolis $MOUNT_POINT testfile" | crontab -
+        echo "Done"
+ 
+  AutoScalingGroup: 
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties: 
+      VPCZoneIdentifier:
+        - !Ref SubnetID1
+        - !Ref SubnetID2
+      LaunchConfigurationName: 
+        Ref: "LaunchConfig"
+      MinSize: !Ref DesiredCapacity
+      MaxSize: !Ref DesiredCapacity
+      MetricsCollection: 
+        - 
+          Granularity: "1Minute"
+          Metrics: 
+            - "GroupMinSize"
+            - "GroupMaxSize"
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 60
+      Tags:
+      - Key: Name
+        Value: BackupTestInstance
+        PropagateAtLaunch: true
+      - Key: !Ref InstanceTagKey
+        Value: !Ref InstanceTagValue
+        PropagateAtLaunch: true
+      - Key: CostCenter
+        Value: 100A870
+        PropagateAtLaunch: true
+      - Key: DataClassification
+        Value: OrangeCci
+        PropagateAtLaunch: true
+      - Key: Level1BusinessArea
+        Value: Global Services
+        PropagateAtLaunch: true
+      - Key: PrimaryItContact
+        Value: Virender Dhiman (C237115)
+        PropagateAtLaunch: true
+      - Key: SystemCustodian
+        Value: Todd Walter (RM93513)
+        PropagateAtLaunch: true
+      - Key: SystemOwner
+        Value: Greg Adair (C054868)
+        PropagateAtLaunch: true
+      - Key: CNAME
+        Value: backuptestserver1.aws.lilly.com
+        PropagateAtLaunch: true
+

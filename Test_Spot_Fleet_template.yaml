@@ -1,0 +1,223 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template launches a fleet of specified spot instances for testing
+Parameters:
+    InstanceType:
+        Description: Type of Instance to launch
+        Type: String
+        Default: t2.micro
+    TargetCapacity:
+        Description: Number of spot instances to launch
+        Type: Number
+        Default: 10
+    SpotPrice:
+        Description: Bid Price for the spot instances
+        Type: String
+        Default: 0.004
+    SpotFleetRole:
+      Description: Spot Fleet role ARN
+      Type: String
+    AMIId:
+      Description: Image to use
+      Type: AWS::EC2::Image::Id
+      AllowedValues: [ami-57615632, ami-f63b1193]
+      Default: ami-f63b1193
+    GroupId:
+      Description: Security group for Spot instances
+      Type: AWS::EC2::SecurityGroup::Id
+    SubnetID1:
+      Description: SubnetID1
+      Type: AWS::EC2::Subnet::Id
+    SubnetID2:
+      Description: SubnetID2
+      Type: AWS::EC2::Subnet::Id
+    IAMRole:
+      Description: Role to use for Instance Profile. Ensure role provides access to SSM
+      Type: String
+    KeyPair:
+      Description: Keys to use for the spot instances
+      Type: AWS::EC2::KeyPair::KeyName
+    InstanceTagKey:
+      Description: Tag Key to apply to instances.
+      Type: String
+    InstanceTagValue:
+      Description: Tag Value to apply to instances.
+      Type: String
+Resources:
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles:
+      - !Ref IAMRole
+      InstanceProfileName: OpsAutomator-SpotInstanceProfile
+
+  SpotFleet:
+    Type: AWS::EC2::SpotFleet
+    Properties:
+      SpotFleetRequestConfigData:
+        IamFleetRole: !Ref SpotFleetRole
+        SpotPrice: !Ref SpotPrice
+        TargetCapacity:
+          Ref: TargetCapacity
+        LaunchSpecifications:
+          - BlockDeviceMappings:
+            - DeviceName: '/dev/xvdba'
+              Ebs:
+                 DeleteOnTermination: true
+                 Encrypted: true
+                 VolumeSize: 10
+                 VolumeType: 'gp2'
+            InstanceType:
+              Ref: InstanceType
+            ImageId:
+              Ref: AMIId
+            SecurityGroups:
+            - GroupId: !Ref GroupId
+            SubnetId: !Ref SubnetID1
+            IamInstanceProfile:
+              Arn:
+                Fn::GetAtt:
+                - InstanceProfile
+                - Arn
+            TagSpecifications:
+            - ResourceType: instance
+              Tags:
+              - Key: Name
+                Value: OATest-SpotInstance
+              - Key: !Ref InstanceTagKey
+                Value: !Ref InstanceTagValue
+              - Key: CostCenter
+                Value: 100A870
+              - Key: DataClassification
+                Value: OrangeCci
+              - Key: Level1BusinessArea
+                Value: Global Services
+              - Key: PrimaryItContact
+                Value: Virender Dhiman (C237115)
+              - Key: SystemCustodian
+                Value: Todd Walter (RM93513)
+              - Key: SystemOwner
+                Value: Greg Adair (C054868)
+            KeyName: !Ref KeyPair
+            UserData: !Base64 |
+              #!/bin/bash -xe
+              DEVICE=/dev/xvdba
+              MOUNT_POINT=/data
+
+              DEVICE_FS_TYPE=`file -sL $DEVICE `
+
+              if [[ $DEVICE_FS_TYPE == *"ext4"* ]]; then
+                echo "Device formatted"
+              else
+                echo "Formatting $DEVICE with an Ext4 fs"
+                mkfs.ext4 -q -F $DEVICE
+                echo
+              fi
+
+              #Label the device
+              echo "Labelling $DEVICE"
+              e2label  $DEVICE $MOUNT_POINT
+              echo
+
+              #Backup fstab
+              echo "Copying /etc/fstab to /etc/fstab.orig"
+              cp /etc/fstab /etc/fstab.orig
+              echo
+
+              if [ ! -d "$MOUNT_POINT" ]; then mkdir -p $MOUNT_POINT; fi
+              #Add new entry to fstab for the new device
+              echo "Adding new fstab entry"
+              echo "LABEL=$MOUNT_POINT     $MOUNT_POINT           ext4    defaults,nofail  2   2" >> /etc/fstab
+              echo
+
+              #Mount all devices
+              echo "Mounting all devices"
+              mount -a
+              echo
+
+              #setting up cron job to periodically update file
+              echo "Setting up cron job to periodically update file"
+              crontab -l 2>/dev/null 
+              echo "* */1 * * * sudo date > $MOUNT_POINT/date.txt" | crontab -
+
+              echo "Done"
+          - BlockDeviceMappings:
+            - DeviceName: '/dev/xvdba'
+              Ebs:
+                 DeleteOnTermination: true
+                 Encrypted: true
+                 VolumeSize: 10
+                 VolumeType: 'gp2'
+            InstanceType:
+              Ref: InstanceType
+            ImageId:
+              Ref: AMIId
+            SecurityGroups:
+            - GroupId: !Ref GroupId
+            SubnetId: !Ref SubnetID2
+            IamInstanceProfile:
+              Arn:
+                Fn::GetAtt:
+                - InstanceProfile
+                - Arn
+            TagSpecifications:
+            - ResourceType: instance
+              Tags:
+              - Key: Name
+                Value: OATest-SpotInstance
+              - Key: !Ref InstanceTagKey
+                Value: !Ref InstanceTagValue
+              - Key: CostCenter
+                Value: 100A870
+              - Key: DataClassification
+                Value: OrangeCci
+              - Key: Level1BusinessArea
+                Value: Global Services
+              - Key: PrimaryItContact
+                Value: Virender Dhiman (C237115)
+              - Key: SystemCustodian
+                Value: Todd Walter (RM93513)
+              - Key: SystemOwner
+                Value: Greg Adair (C054868)
+            KeyName: !Ref KeyPair
+            UserData: !Base64 |
+              #!/bin/bash -xe
+              DEVICE=/dev/xvdba
+              MOUNT_POINT=/data
+
+              DEVICE_FS_TYPE=`file -sL $DEVICE `
+
+              if [[ $DEVICE_FS_TYPE == *"ext4"* ]]; then
+                echo "Device formatted"
+              else
+                echo "Formatting $DEVICE with an Ext4 fs"
+                mkfs.ext4 -q -F $DEVICE
+                echo
+              fi
+
+              #Label the device
+              echo "Labelling $DEVICE"
+              e2label  $DEVICE $MOUNT_POINT
+              echo
+
+              #Backup fstab
+              echo "Copying /etc/fstab to /etc/fstab.orig"
+              cp /etc/fstab /etc/fstab.orig
+              echo
+
+              if [ ! -d "$MOUNT_POINT" ]; then mkdir -p $MOUNT_POINT; fi
+              #Add new entry to fstab for the new device
+              echo "Adding new fstab entry"
+              echo "LABEL=$MOUNT_POINT     $MOUNT_POINT           ext4    defaults,nofail  2   2" >> /etc/fstab
+              echo
+
+              #Mount all devices
+              echo "Mounting all devices"
+              mount -a
+              echo
+
+              #setting up cron job to periodically update file
+              echo "Setting up cron job to periodically update file"
+              crontab -l 2>/dev/null
+              echo "* */2 * * * sudo date > $MOUNT_POINT/date.txt" | crontab -
+
+              echo "Done"
